@@ -26,7 +26,7 @@ spark = SparkSession.builder \
     .appName("FlightStream") \
     .config("spark.jars.packages",
             "org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0,"
-            "com.google.cloud.spark:spark-bigquery-with-dependencies_2.12:0.36.1") \
+            "com.google.cloud.spark:spark-bigquery-with-dependencies_2.12:0.34.0") \
     .getOrCreate()
 
 spark.sparkContext.setLogLevel("WARN")
