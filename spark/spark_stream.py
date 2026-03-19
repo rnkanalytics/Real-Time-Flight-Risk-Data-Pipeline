@@ -60,6 +60,7 @@ cleaned = parsed \
     .withColumn("velocity",     spark_round(col("velocity"), 1)) \
     .withColumn("heading",      spark_round(col("heading"),  1)) \
     .withColumn("velocity_kmh", spark_round(col("velocity") * 3.6, 1)) \
+    .withColumn("on_ground",    col("on_ground").cast(BooleanType())) \
     .withColumn("created_at",   current_timestamp())
 
 def write_to_bigquery(batch_df, batch_id):
