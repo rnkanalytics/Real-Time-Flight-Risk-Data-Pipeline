@@ -1,0 +1,5 @@
+# Kafka client library — lets Python connect to Kafka and send messages
+kafka-python==2.0.2
+
+# HTTP library — lets Python make API calls to OpenSky
+requests==2.31.0
