@@ -6,14 +6,15 @@ from pyspark.sql.functions import from_json, col, trim, round as spark_round, cu
 from pyspark.sql.types import StructType, StructField, StringType, DoubleType
 
 schema = StructType([
-    StructField("icao24",    StringType(), True),
-    StructField("callsign",  StringType(), True),
-    StructField("latitude",  DoubleType(), True),
-    StructField("longitude", DoubleType(), True),
-    StructField("altitude",  DoubleType(), True),
-    StructField("heading",   DoubleType(), True),
-    StructField("velocity",  DoubleType(), True),
-    StructField("timestamp", StringType(), True),
+    StructField("icao24",        StringType(), True),
+    StructField("callsign",      StringType(), True),
+    StructField("latitude",      DoubleType(), True),
+    StructField("longitude",     DoubleType(), True),
+    StructField("altitude",      DoubleType(), True),
+    StructField("heading",       DoubleType(), True),
+    StructField("velocity",      DoubleType(), True),
+    StructField("vertical_rate", DoubleType(), True),
+    StructField("timestamp",     StringType(), True),
 ])
 
 spark = SparkSession.builder \
@@ -37,11 +38,12 @@ cleaned = parsed \
     .filter(col("latitude").isNotNull()) \
     .filter(col("longitude").isNotNull()) \
     .filter(col("icao24").isNotNull()) \
-    .withColumn("callsign",  trim(col("callsign"))) \
-    .withColumn("altitude",  spark_round(col("altitude"), 1)) \
-    .withColumn("velocity",  spark_round(col("velocity"), 1)) \
-    .withColumn("heading",   spark_round(col("heading"),  1)) \
-    .withColumn("created_at", current_timestamp())
+    .withColumn("callsign",      trim(col("callsign"))) \
+    .withColumn("altitude",      spark_round(col("altitude"), 1)) \
+    .withColumn("velocity",      spark_round(col("velocity"), 1)) \
+    .withColumn("heading",       spark_round(col("heading"), 1)) \
+    .withColumn("vertical_rate", spark_round(col("vertical_rate"), 1)) \
+    .withColumn("created_at",    current_timestamp())
 
 
 def write_to_bigquery(batch_df, batch_id):

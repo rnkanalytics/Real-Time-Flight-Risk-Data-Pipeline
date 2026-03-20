@@ -39,15 +39,18 @@ def fetch_flights() -> list:
         if isinstance(alt_baro, str):
             alt_baro = 0
 
+        vertical_rate = ac.get("geom_rate") or ac.get("baro_rate")
+
         records.append({
-            "icao24":    ac.get("hex", "").lower().strip(),
-            "callsign":  ac.get("flight", "").strip(),
-            "latitude":  ac.get("lat"),
-            "longitude": ac.get("lon"),
-            "altitude":  alt_baro,
-            "heading":   ac.get("track"),
-            "velocity":  ac.get("gs"),
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "icao24":        ac.get("hex", "").lower().strip(),
+            "callsign":      ac.get("flight", "").strip(),
+            "latitude":      ac.get("lat"),
+            "longitude":     ac.get("lon"),
+            "altitude":      alt_baro,
+            "heading":       ac.get("track"),
+            "velocity":      ac.get("gs"),
+            "vertical_rate": vertical_rate,
+            "timestamp":     datetime.now(timezone.utc).isoformat(),
         })
 
     return records
