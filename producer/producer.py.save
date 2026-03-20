@@ -1,5 +1,4 @@
-import os
-import json
+^Ximport json
 import time
 import logging
 import requests
@@ -9,14 +8,16 @@ from kafka import KafkaProducer
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
-KAFKA_BROKER    = os.environ.get("KAFKA_BROKER", "kafka:29092")
-KAFKA_TOPIC     = "flights-raw"
-API_URL         = "https://api.airplanes.live/v2/point/0/0/99999"
-POLL_INTERVAL   = 30
-MAX_SEEN_POS    = 30.0
+# ── Config ────────────────────────────────────────────────────────────────────
+KAFKA_BROKER    = "kafka:9092"
+KAFKA_TOPIC     = "flights"
+API_URL         = "https://api.airplanes.live/v2/point/51.5/0.0/250"
+POLL_INTERVAL   = 10          # seconds
+MAX_SEEN_POS    = 30.0        # skip aircraft with position older than 30s
+# ─────────────────────────────────────────────────────────────────────────────
 
 
-def fetch_flights() -> list:
+def fetch_flights() -> list[dict]:
     try:
         resp = requests.get(API_URL, timeout=10)
         resp.raise_for_status()
@@ -30,11 +31,15 @@ def fetch_flights() -> list:
 
     records = []
     for ac in aircraft:
+        # Must have a position
         if ac.get("lat") is None or ac.get("lon") is None:
             continue
+
+        # Skip stale positions
         if ac.get("seen_pos", 9999) > MAX_SEEN_POS:
             continue
 
+        # alt_baro can be the string "ground" — coerce to 0
         alt_baro = ac.get("alt_baro")
         if isinstance(alt_baro, str):
             alt_baro = 0
@@ -43,27 +48,28 @@ def fetch_flights() -> list:
         if isinstance(alt_geom, str):
             alt_geom = 0
 
+        # vertical rate: field is geom_rate or baro_rate depending on aircraft
         vertical_rate = ac.get("geom_rate") or ac.get("baro_rate")
 
         records.append({
             "icao24":        ac.get("hex", "").lower().strip(),
             "callsign":      ac.get("flight", "").strip(),
-            "registration":  ac.get("r", "").strip(),
-            "aircraft_type": ac.get("t", "").strip(),
-            "description":   ac.get("desc", "").strip(),
+            "registration":  ac.get("r", "").strip(),       # e.g. "G-FLYW"
+            "aircraft_type": ac.get("t", "").strip(),       # e.g. "BE20"
+            "description":   ac.get("desc", "").strip(),    # e.g. "BEECH 200 Super King Air"
             "latitude":      ac.get("lat"),
             "longitude":     ac.get("lon"),
-            "altitude":      alt_baro,
-            "altitude_geom": alt_geom,
-            "velocity":      ac.get("gs"),
-            "heading":       ac.get("track"),
-            "vertical_rate": vertical_rate,
+            "altitude":      alt_baro,                      # feet, barometric
+            "altitude_geom": alt_geom,                      # feet, geometric
+            "velocity":      ac.get("gs"),                  # knots
+            "heading":       ac.get("track"),               # degrees true
+            "vertical_rate": vertical_rate,                 # ft/min
             "squawk":        ac.get("squawk"),
             "emergency":     ac.get("emergency", "none"),
-            "category":      ac.get("category"),
-            "source":        ac.get("type", "unknown"),
-            "seen_pos":      ac.get("seen_pos"),
-            "distance_km":   ac.get("dst"),
+            "category":      ac.get("category"),            # A1, A2 … A7
+            "source":        ac.get("type", "unknown"),     # adsb_icao / mlat …
+            "seen_pos":      ac.get("seen_pos"),            # seconds since last position
+            "distance_km":   ac.get("dst"),                 # km from query point
             "timestamp":     datetime.now(timezone.utc).isoformat(),
         })
 
@@ -83,6 +89,7 @@ def main():
         records = fetch_flights()
         for record in records:
             producer.send(KAFKA_TOPIC, value=record)
+
         producer.flush()
         logger.info(f"Published {len(records)} records to Kafka")
         time.sleep(POLL_INTERVAL)

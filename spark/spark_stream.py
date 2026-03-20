@@ -2,81 +2,81 @@ import functools
 print = functools.partial(print, flush=True)
 
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import from_json, col, trim, round as spark_round, current_timestamp
-from pyspark.sql.types import StructType, StructField, StringType, FloatType, BooleanType, LongType
+from pyspark.sql.functions import from_json, col, trim, round as spark_round, current_timestamp, row_number, desc
+from pyspark.sql.types import StructType, StructField, StringType, DoubleType
+from pyspark.sql.window import Window
 
-# Define the schema — tells Spark what fields to expect from Kafka
 schema = StructType([
-    StructField("icao24",         StringType(),  True),
-    StructField("callsign",       StringType(),  True),
-    StructField("origin_country", StringType(),  True),
-    StructField("longitude",      FloatType(),   True),
-    StructField("latitude",       FloatType(),   True),
-    StructField("altitude",       FloatType(),   True),
-    StructField("velocity",       FloatType(),   True),
-    StructField("heading",        FloatType(),   True),
-    StructField("on_ground",      BooleanType(), True),
-    StructField("timestamp",      LongType(),    True),
-    StructField("category",       LongType(),    True),
+    StructField("icao24",        StringType(),  True),
+    StructField("callsign",      StringType(),  True),
+    StructField("registration",  StringType(),  True),
+    StructField("aircraft_type", StringType(),  True),
+    StructField("description",   StringType(),  True),
+    StructField("latitude",      DoubleType(),  True),
+    StructField("longitude",     DoubleType(),  True),
+    StructField("altitude",      DoubleType(),  True),
+    StructField("altitude_geom", DoubleType(),  True),
+    StructField("velocity",      DoubleType(),  True),
+    StructField("heading",       DoubleType(),  True),
+    StructField("vertical_rate", DoubleType(),  True),
+    StructField("squawk",        StringType(),  True),
+    StructField("emergency",     StringType(),  True),
+    StructField("category",      StringType(),  True),
+    StructField("source",        StringType(),  True),
+    StructField("seen_pos",      DoubleType(),  True),
+    StructField("distance_km",   DoubleType(),  True),
+    StructField("timestamp",     StringType(),  True),
 ])
 
-# Create the Spark session
-# Only two packages needed — kafka connector and bigquery connector
 spark = SparkSession.builder \
-    .appName("FlightStream") \
-    .config("spark.jars.packages",
-            "org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0,"
-            "com.google.cloud.spark:spark-bigquery-with-dependencies_2.12:0.34.0") \
+    .appName("FlightStreamProcessor") \
     .getOrCreate()
 
 spark.sparkContext.setLogLevel("WARN")
 
-# Set BigQuery project
-spark.conf.set("parentProject", "flights-490708")
-
-# Read from Kafka topic flights-raw
-df = spark.readStream \
+raw = spark.readStream \
     .format("kafka") \
     .option("kafka.bootstrap.servers", "kafka:29092") \
     .option("subscribe", "flights-raw") \
     .option("startingOffsets", "latest") \
-    .option("failOnDataLoss", "false") \
     .load()
 
-# Parse the raw JSON using our schema
-parsed = df.select(
+parsed = raw.select(
     from_json(col("value").cast("string"), schema).alias("data")
 ).select("data.*")
 
-# Cleaning steps
 cleaned = parsed \
     .filter(col("latitude").isNotNull()) \
     .filter(col("longitude").isNotNull()) \
     .filter(col("icao24").isNotNull()) \
-    .filter(col("callsign").isNotNull()) \
     .withColumn("callsign",     trim(col("callsign"))) \
     .withColumn("altitude",     spark_round(col("altitude"), 1)) \
     .withColumn("velocity",     spark_round(col("velocity"), 1)) \
     .withColumn("heading",      spark_round(col("heading"),  1)) \
-    .withColumn("velocity_kmh", spark_round(col("velocity") * 3.6, 1)) \
-    .withColumn("on_ground",    col("on_ground").cast(BooleanType())) \
+    .withColumn("velocity_kmh", spark_round(col("velocity") * 1.852, 1)) \
     .withColumn("created_at",   current_timestamp())
 
-def write_to_bigquery(batch_df, batch_id):
-    """Write each cleaned micro batch directly to BigQuery"""
-    count = batch_df.count()
-    print(f"Writing batch {batch_id} — {count} flights to BigQuery")
 
-    batch_df.write \
+def write_to_bigquery(batch_df, batch_id):
+    # Deduplicate — keep only latest position per aircraft in this batch
+    window = Window.partitionBy("icao24").orderBy(desc("created_at"))
+    deduped = batch_df.withColumn("rn", row_number().over(window)) \
+                      .filter(col("rn") == 1) \
+                      .drop("rn")
+
+    count = deduped.count()
+    print(f"Writing batch {batch_id} — {count} flights to BigQuery")
+    if count == 0:
+        return
+    deduped.write \
         .format("bigquery") \
         .option("table", "flights-490708.flight_data.flights") \
         .option("writeMethod", "direct") \
         .mode("append") \
         .save()
-
     print(f"Batch {batch_id} written successfully")
 
-# Start the streaming query
+
 cleaned.writeStream \
     .foreachBatch(write_to_bigquery) \
     .option("checkpointLocation", "/tmp/checkpoint") \
