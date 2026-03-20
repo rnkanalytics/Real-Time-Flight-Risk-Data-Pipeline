@@ -1,75 +1,92 @@
 import json
 import time
-import requests
-from kafka import KafkaProducer
-from kafka.errors import NoBrokersAvailable
+import logging
 import os
-import functools
-print = functools.partial(print, flush=True)
+import requests
+from datetime import datetime, timezone
+from kafka import KafkaProducer
 
-def create_producer():
-    for attempt in range(10):
-        try:
-            print(f"Connecting to Kafka... attempt {attempt + 1}")
-            return KafkaProducer(
-                bootstrap_servers=os.environ.get('KAFKA_BROKER', 'localhost:9092'),
-                value_serializer=lambda v: json.dumps(v).encode('utf-8')
-            )
-        except NoBrokersAvailable:
-            print("Kafka not ready yet — waiting 5 seconds...")
-            time.sleep(5)
-    raise Exception("Could not connect to Kafka after 10 attempts")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+logger = logging.getLogger(__name__)
 
-producer = create_producer()
+KAFKA_BROKER    = os.environ.get("KAFKA_BROKER", "kafka:29092")
+KAFKA_TOPIC     = "flights-raw"
+API_URL         = "https://api.airplanes.live/v2/point/51.5/0.0/250"
+POLL_INTERVAL   = 10
+MAX_SEEN_POS    = 30.0
 
-def fetch_flights():
-    """Call the OpenSky API and return raw flight states"""
-    url = "https://opensky-network.org/api/states/all"
+
+def fetch_flights() -> list:
     try:
-        response = requests.get(
-            url,
-            timeout=10,
-            auth=(
-                os.environ.get('OPENSKY_CLIENT_ID'),
-                os.environ.get('OPENSKY_CLIENT_SECRET')
-            )
-        )
-        if response.status_code != 200:
-            print(f"API returned status {response.status_code} — skipping this fetch")
-            return []
-        data = response.json()
-        return data.get('states', [])
-    except Exception as e:
-        print(f"Error fetching flights: {e}")
+        resp = requests.get(API_URL, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+    except requests.RequestException as e:
+        logger.error(f"API request failed: {e}")
         return []
 
-def parse_flight(state):
-    """Convert raw API array into a readable dictionary"""
-    return {
-        "icao24":         state[0],
-        "callsign":       state[1],
-        "origin_country": state[2],
-        "longitude":      state[5],
-        "latitude":       state[6],
-        "altitude":       state[7],
-        "velocity":       state[9],
-        "heading":        state[10],
-        "on_ground":      state[8],
-        "timestamp":      state[3],
-        "category":       state[17] if len(state) > 17 else None,
-    }
+    aircraft = data.get("ac", [])
+    logger.info(f"Fetched {len(aircraft)} aircraft from airplanes.live")
 
-print("Producer starting — fetching flights every 10 seconds...")
+    records = []
+    for ac in aircraft:
+        if ac.get("lat") is None or ac.get("lon") is None:
+            continue
+        if ac.get("seen_pos", 9999) > MAX_SEEN_POS:
+            continue
 
-while True:
-    flights = fetch_flights()
-    print(f"Fetched {len(flights)} flights")
+        alt_baro = ac.get("alt_baro")
+        if isinstance(alt_baro, str):
+            alt_baro = 0
 
-    for state in flights:
-        if state[5] and state[6]:
-            flight = parse_flight(state)
-            producer.send('flights-raw', flight)
+        alt_geom = ac.get("alt_geom")
+        if isinstance(alt_geom, str):
+            alt_geom = 0
 
-    producer.flush()
-    print(f"Sent {len(flights)} flights to Kafka topic: flights-raw")
-    time.sleep(10)
+        vertical_rate = ac.get("geom_rate") or ac.get("baro_rate")
+
+        records.append({
+            "icao24":        ac.get("hex", "").lower().strip(),
+            "callsign":      ac.get("flight", "").strip(),
+            "registration":  ac.get("r", "").strip(),
+            "aircraft_type": ac.get("t", "").strip(),
+            "description":   ac.get("desc", "").strip(),
+            "latitude":      ac.get("lat"),
+            "longitude":     ac.get("lon"),
+            "altitude":      alt_baro,
+            "altitude_geom": alt_geom,
+            "velocity":      ac.get("gs"),
+            "heading":       ac.get("track"),
+            "vertical_rate": vertical_rate,
+            "squawk":        ac.get("squawk"),
+            "emergency":     ac.get("emergency", "none"),
+            "category":      ac.get("category"),
+            "source":        ac.get("type", "unknown"),
+            "seen_pos":      ac.get("seen_pos"),
+            "distance_km":   ac.get("dst"),
+            "timestamp":     datetime.now(timezone.utc).isoformat(),
+        })
+
+    return records
+
+
+def main():
+    producer = KafkaProducer(
+        bootstrap_servers=KAFKA_BROKER,
+        value_serializer=lambda v: json.dumps(v).encode("utf-8"),
+        acks="all",
+        retries=3,
+    )
+    logger.info(f"Kafka producer connected → topic: {KAFKA_TOPIC}")
+
+    while True:
+        records = fetch_flights()
+        for record in records:
+            producer.send(KAFKA_TOPIC, value=record)
+        producer.flush()
+        logger.info(f"Published {len(records)} records to Kafka")
+        time.sleep(POLL_INTERVAL)
+
+
+if __name__ == "__main__":
+    main()
