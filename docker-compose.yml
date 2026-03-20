@@ -1,8 +1,8 @@
 services:
-
   zookeeper:
     image: confluentinc/cp-zookeeper:7.4.0
     container_name: zookeeper
+    restart: always
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
       ZOOKEEPER_TICK_TIME: 2000
@@ -10,6 +10,7 @@ services:
   kafka:
     image: confluentinc/cp-kafka:7.4.0
     container_name: kafka
+    restart: always
     depends_on:
       - zookeeper
     ports:
@@ -26,6 +27,7 @@ services:
   producer:
     build: ./producer
     container_name: producer
+    restart: always
     depends_on:
       - kafka
     env_file:
@@ -36,6 +38,7 @@ services:
   spark:
     image: apache/spark:3.5.0
     container_name: spark
+    restart: always
     user: root
     environment:
       - SPARK_MODE=master
@@ -49,6 +52,7 @@ services:
   grafana:
     image: grafana/grafana:10.0.0
     container_name: grafana
+    restart: always
     ports:
       - "3000:3000"
     environment:
