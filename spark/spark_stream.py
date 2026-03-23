@@ -58,7 +58,7 @@ def write_to_bigquery(batch_df, batch_id):
         .save()
 
     from google.cloud import bigquery
-    client = bigquery.Client()
+    client = bigquery.Client(project="flights-490708")
     cleanup_query = """
         DELETE FROM `flights-490708.flight_data.flights`
         WHERE created_at < (
