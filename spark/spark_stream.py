@@ -20,7 +20,6 @@ schema = StructType([
 spark = SparkSession.builder \
     .appName("FlightStreamProcessor") \
     .getOrCreate()
-
 spark.sparkContext.setLogLevel("WARN")
 
 raw = spark.readStream \
@@ -45,20 +44,32 @@ cleaned = parsed \
     .withColumn("vertical_rate", spark_round(col("vertical_rate"), 1)) \
     .withColumn("created_at",    current_timestamp())
 
-
 def write_to_bigquery(batch_df, batch_id):
     count = batch_df.count()
     print(f"Writing batch {batch_id} — {count} flights to BigQuery")
     if count == 0:
         return
+
+    # Write new batch
     batch_df.write \
         .format("bigquery") \
         .option("table", "flights-490708.flight_data.flights") \
         .option("writeMethod", "direct") \
         .mode("append") \
         .save()
-    print(f"Batch {batch_id} written successfully")
 
+    # Delete everything except the latest batch
+    from google.cloud import bigquery
+    client = bigquery.Client()
+    cleanup_query = """
+        DELETE FROM `flights-490708.flight_data.flights`
+        WHERE created_at < (
+            SELECT MAX(created_at)
+            FROM `flights-490708.flight_data.flights`
+        )
+    """
+    client.query(cleanup_query).result()
+    print(f"Batch {batch_id} written, previous batch purged")
 
 cleaned.writeStream \
     .foreachBatch(write_to_bigquery) \
