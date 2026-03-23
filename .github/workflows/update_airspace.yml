@@ -28,4 +28,4 @@ jobs:
         run: python update_airspace.py
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          GOOGLE_APPLICATION_CREDENTIALS: /tmp/gcp-key.json
+          GOOGLE_APPLICATION_CREDENTIALS: /tmp/gcp-key.json# trigger
