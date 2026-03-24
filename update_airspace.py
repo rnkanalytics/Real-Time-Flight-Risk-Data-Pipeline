@@ -1,5 +1,3 @@
-cd /Users/ramizkhatib/Desktop/flight-pipeline
-cat > update_airspace.py << 'ENDOFFILE'
 import anthropic
 from google.cloud import bigquery
 from datetime import datetime
@@ -285,8 +283,3 @@ if __name__ == "__main__":
     print(f"Validated bounding boxes")
     refresh_bigquery(zones)
     print(f"--- Done {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')} ---")
-ENDOFFILE
-
-git add update_airspace.py
-git commit -m "fix: WRITE_TRUNCATE with all country bounds"
-git push origin main
