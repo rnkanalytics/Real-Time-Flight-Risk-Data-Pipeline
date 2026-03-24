@@ -84,8 +84,8 @@ KNOWN_BOUNDS = {
     "Iceland":                    {"min_lat": 63.496382, "max_lat": 66.526792, "min_lon": -24.326184, "max_lon": -13.609732},
     "India":                      {"min_lat": 7.965534, "max_lat": 35.494009, "min_lon": 68.176645, "max_lon": 97.402561},
     "Indonesia":                  {"min_lat": -10.359987, "max_lat": 5.479820, "min_lon": 95.293026, "max_lon": 141.033851},
-    "Iran":                       {"min_lat": 29.0, "max_lat": 39.781650, "min_lon": 44.031890, "max_lon": 63.333270},
-    "Iraq":                       {"min_lat": 29.058566, "max_lat": 37.380932, "min_lon": 39.5, "max_lon": 48.841270},
+    "Iran":                       {"min_lat": 29.000000, "max_lat": 39.781650, "min_lon": 44.031890, "max_lon": 63.333270},
+    "Iraq":                       {"min_lat": 29.058566, "max_lat": 37.380932, "min_lon": 39.500000, "max_lon": 48.841270},
     "Ireland":                    {"min_lat": 51.669301, "max_lat": 55.131622, "min_lon": -9.977085, "max_lon": -6.032985},
     "Israel":                     {"min_lat": 29.453379, "max_lat": 33.335631, "min_lon": 34.267499, "max_lon": 35.895023},
     "Italy":                      {"min_lat": 36.619987, "max_lat": 47.115393, "min_lon": 6.749955, "max_lon": 18.480247},
@@ -187,6 +187,7 @@ KNOWN_BOUNDS = {
     "Zimbabwe":                   {"min_lat": -22.424109, "max_lat": -15.609703, "min_lon": 25.237300, "max_lon": 33.068341},
 }
 
+
 def ask_claude_for_restrictions():
     response = claude.messages.create(
         model="claude-sonnet-4-6",
@@ -228,7 +229,7 @@ def ask_claude_for_restrictions():
         if hasattr(block, "text"):
             text += block.text
 
-    print(f"Raw Claude response: {text[:500]}")
+    print(f"Raw Claude response preview: {text[:500]}")
 
     text = text.strip()
     if not text:
