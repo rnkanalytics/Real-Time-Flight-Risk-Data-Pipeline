@@ -188,42 +188,44 @@ KNOWN_BOUNDS = {
     "Zimbabwe":                   {"min_lat": -22.424109,"max_lat": -15.609703,"min_lon": 25.237300, "max_lon": 33.068341},
 }
 
+# Build a lowercase lookup so Claude's country names can be matched flexibly
+KNOWN_BOUNDS_LOWER = {k.lower(): (k, v) for k, v in KNOWN_BOUNDS.items()}
+
 
 def ask_claude_for_restrictions():
+    """
+    Ask Claude ONLY which countries are restricted and why.
+    Claude must NOT return coordinates — those are always sourced from KNOWN_BOUNDS.
+    """
+    valid_countries = list(KNOWN_BOUNDS.keys())
+
     for attempt in range(3):
         try:
             response = claude.messages.create(
-                model="claude-sonnet-4-6",
+                model="claude-sonnet-4-20250514",
                 max_tokens=4096,
                 tools=[{"type": "web_search_20250305", "name": "web_search"}],
                 messages=[{
                     "role": "user",
-                    "content": """Search the web for countries with currently restricted or closed 
-                    airspace in 2026 due to conflict, war, or military activity. 
-                    Use sources like safeairspace.net, FAA NOTAMs, and EASA advisories.
-                    Return ONLY a raw JSON array, no markdown, no explanation.
+                    "content": f"""Search the web for countries with currently restricted or closed
+airspace in 2026 due to conflict, war, or military activity.
+Use sources like safeairspace.net, FAA NOTAMs, and EASA advisories.
 
-                    CRITICAL COORDINATE RULES:
-                    - Use the actual sovereign border coordinates of the country ONLY
-                    - Do NOT expand the bounding box to cover surrounding conflict regions
-                    - Do NOT include neighboring countries in the bounding box
-                    - Bounding boxes must be tight to the country's actual borders
+Return ONLY a raw JSON array with NO markdown, NO code fences, NO explanation.
 
-                    EXAMPLES:
-                    - Iran: correct is (~29.0 to 39.8 lat, 44.0 to 63.3 lon), NOT 25.0 lat which bleeds into Saudi Arabia
-                    - Ukraine: correct is (~44.4 to 52.4 lat, 22.1 to 40.2 lon), NOT broader bounds that bleed into Poland or Romania
+CRITICAL RULES:
+- Do NOT include any coordinates. Coordinates are handled separately.
+- The "country" field MUST exactly match one of the following valid country names:
+  {json.dumps(valid_countries, indent=2)}
+- If a restricted region does not match any name in that list, omit it.
 
-                    Each object must have exactly these fields:
-                    {
-                      "country": "string",
-                      "reason": "string (one sentence)",
-                      "min_lat": float,
-                      "max_lat": float,
-                      "min_lon": float,
-                      "max_lon": float,
-                      "severity": "CLOSED or RESTRICTED or HIGH RISK",
-                      "since": "YYYY-MM-DD"
-                    }"""
+Each object must have exactly these fields:
+{{
+  "country": "string (must be from the valid list above)",
+  "reason": "string (one sentence describing the restriction)",
+  "severity": "CLOSED or RESTRICTED or HIGH RISK",
+  "since": "YYYY-MM-DD"
+}}"""
                 }]
             )
 
@@ -240,7 +242,7 @@ def ask_claude_for_restrictions():
                 time.sleep(5)
                 continue
 
-            # Strip markdown fences
+            # Strip markdown fences if Claude added them despite instructions
             if "```" in text:
                 parts = text.split("```")
                 for part in parts:
@@ -276,30 +278,39 @@ def ask_claude_for_restrictions():
     raise ValueError("Failed to get valid response from Claude after 3 attempts")
 
 
-def validate_zones(zones):
-    validated = []
+def apply_known_bounds(zones):
+    """
+    Merge Claude's restriction data with coordinates from KNOWN_BOUNDS.
+    Any zone whose country is not in KNOWN_BOUNDS is dropped with a warning.
+    Claude-supplied coordinates (if any) are completely ignored.
+    """
+    enriched = []
     for zone in zones:
-        country = zone.get("country", "")
+        country = zone.get("country", "").strip()
 
-        # Always override with KNOWN_BOUNDS if available
+        # Exact match first
         if country in KNOWN_BOUNDS:
             bounds = KNOWN_BOUNDS[country]
-            original = (zone["min_lat"], zone["max_lat"], zone["min_lon"], zone["max_lon"])
-            zone["min_lat"] = max(zone["min_lat"], bounds["min_lat"])
-            zone["max_lat"] = min(zone["max_lat"], bounds["max_lat"])
-            zone["min_lon"] = max(zone["min_lon"], bounds["min_lon"])
-            zone["max_lon"] = min(zone["max_lon"], bounds["max_lon"])
-            updated = (zone["min_lat"], zone["max_lat"], zone["min_lon"], zone["max_lon"])
-            if original != updated:
-                print(f"  Corrected bounds for {country}: {original} -> {updated}")
+        else:
+            # Case-insensitive fallback
+            match = KNOWN_BOUNDS_LOWER.get(country.lower())
+            if match:
+                canonical_name, bounds = match
+                print(f"  Fuzzy-matched '{country}' -> '{canonical_name}'")
+                zone["country"] = canonical_name
+            else:
+                print(f"  SKIPPED '{country}' — not found in KNOWN_BOUNDS")
+                continue
 
-        # Sanity check — skip zones where bounds collapsed
-        if zone["min_lat"] >= zone["max_lat"] or zone["min_lon"] >= zone["max_lon"]:
-            print(f"  Skipping {country} — invalid bounds after validation")
-            continue
+        # Always use KNOWN_BOUNDS coordinates, never Claude's
+        zone["min_lat"] = bounds["min_lat"]
+        zone["max_lat"] = bounds["max_lat"]
+        zone["min_lon"] = bounds["min_lon"]
+        zone["max_lon"] = bounds["max_lon"]
 
-        validated.append(zone)
-    return validated
+        enriched.append(zone)
+
+    return enriched
 
 
 def refresh_bigquery(zones):
@@ -326,9 +337,15 @@ def refresh_bigquery(zones):
 
 if __name__ == "__main__":
     print(f"--- Starting airspace update {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')} ---")
+
+    # Step 1: Claude identifies restricted countries + reasons only (no coordinates)
     zones = ask_claude_for_restrictions()
-    print(f"Claude found {len(zones)} restricted zones")
-    zones = validate_zones(zones)
-    print(f"Validated {len(zones)} zones with correct bounding boxes")
+    print(f"Claude identified {len(zones)} potentially restricted zones")
+
+    # Step 2: All coordinates come from KNOWN_BOUNDS — Claude's are discarded
+    zones = apply_known_bounds(zones)
+    print(f"Enriched {len(zones)} zones with authoritative coordinates from KNOWN_BOUNDS")
+
+    # Step 3: Load into BigQuery
     refresh_bigquery(zones)
     print(f"--- Done {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')} ---")
