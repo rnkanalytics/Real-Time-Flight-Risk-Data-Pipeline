@@ -1,6 +1,6 @@
 -- flight_risk_analytics.sql
--- This is the live view in BigQuery: flights-490708.flight_data.flight_risk_analytics
--- Uses real country border polygons (ST_CONTAINS) to eliminate bounding box false positives
+-- Live view in BigQuery: flights-490708.flight_data.flight_risk_analytics
+-- Uses real country border polygons for accurate distance calculation
 -- Last updated: 2026-03-24
 
 CREATE OR REPLACE VIEW `flights-490708.flight_data.flight_risk_analytics` AS
@@ -114,11 +114,15 @@ FROM (
           AND ST_CONTAINS(cb.border, ST_GEOGPOINT(fl.longitude, fl.latitude))
         THEN 0.0
 
-        -- Real polygon exists BUT flight is outside it → not inside this zone
-        -- Set to 999 so it is excluded by the WHERE clause below
+        -- Real polygon exists BUT flight is outside it → real distance to polygon border
         WHEN cb.border IS NOT NULL
           AND NOT ST_CONTAINS(cb.border, ST_GEOGPOINT(fl.longitude, fl.latitude))
-        THEN 999.0
+        THEN ROUND(
+          ST_DISTANCE(
+            ST_GEOGPOINT(fl.longitude, fl.latitude),
+            cb.border
+          ) * 0.000621371
+        , 1)
 
         -- No polygon available → fall back to bounding box distance
         ELSE ROUND(
@@ -155,7 +159,7 @@ FROM (
       AND fl.latitude  BETWEEN r.min_lat - 2 AND r.max_lat + 2
       AND fl.longitude BETWEEN r.min_lon - 2 AND r.max_lon + 2
   ) f
-  WHERE f.dist_miles < 999
+  WHERE f.dist_miles <= 138
 )
 
 QUALIFY ROW_NUMBER() OVER (
